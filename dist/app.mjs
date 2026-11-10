@@ -28,6 +28,7 @@ function renderChallenge(){
  panel.dataset.signature=signature;
  if(!show)return;
  $('ice-clue').textContent=`Проба ${n.probe} → ${n.same}/4 совпадений по позиции`;
+ $('ice-instruction').textContent=`Выбери вариант, в котором с пробой совпадают ровно ${n.same} из 4 символов на тех же местах. Нажатие отправляет ответ.`;
  $('ice-cost').textContent=`Верный ключ: +${n.breachRisk}% · ошибка: +14% · overload: +${run.overloadCost}%${run.has('leech')?' · возврат −6%':''}`;
  if(n.id===6&&run.coreSealed)$('ice-cost').textContent='ROOT-ICE запечатан: сначала скопируй боковой архив.';
  $('ice-options').replaceChildren(...n.options.map(code=>{
