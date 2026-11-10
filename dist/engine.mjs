@@ -3,12 +3,17 @@ const HEX = '0123456789ABCDEF';
 export const matches = (a, b) => [...a].filter((char, index) => char === b[index]).length;
 
 export class Run {
-  constructor(random = Math.random, sector = 1) {
+  constructor(random = Math.random, sector = 1, config = {}) {
     this.random = random;
     this.sector = sector;
+    this.modules = [...(config.modules || [])];
+    this.adaptation = config.adaptation || 'none';
+    this.anomaly = config.anomaly || {id:'standard',name:'Стабильный канал',description:'Базовые параметры сети.'};
+    this.final = config.final || false;
+    this.metrics = {overloads:0};
     this.phase = 'login';
     this.trace = 0;
-    this.time = 180;
+    this.time = this.has('clock') ? 220 : 180;
     this.at = 0;
     this.tries = 3;
     this.loot = [];
@@ -16,7 +21,7 @@ export class Run {
     this.phantom = true;
     this.cooldown = 0;
     this.transfer = null;
-    this.links = LINKS;
+    this.links = config.links || LINKS;
     this.auth = this.code();
     const swap = this.random() < .5;
     this.nodes = ['GATEWAY','RELAY-A','RELAY-B','VAULT-A','SENTINEL','VAULT-B','QUANTUM'].map((name, id) => {
@@ -29,11 +34,22 @@ export class Run {
         size: id === 6 ? 640 : premium ? 460 : 260,
         transferTime: id === 6 ? 8 : premium ? 7 : 4,
         noise: id === 6 ? 2.6 : premium ? 3.2 : 1.5,
-        breachRisk: id === 4 ? 12 : 5 + Math.floor(this.random() * 5),
+        breachRisk: (id === 4 ? 12 : 5 + Math.floor(this.random() * 5)) + (this.has('zip') ? 4 : 0) + (this.anomaly.id==='blackout' ? 3 : 0),
         taken: false,
       };
     });
+    for (const n of this.nodes) {
+      n.transferTime = Math.max(2, Math.ceil((n.transferTime + (this.has('leech') ? 2 : 0) - (this.anomaly.id==='compression' ? 2 : 0)) / (this.has('zip') ? 2 : 1)));
+      if(this.anomaly.id==='compression')n.noise+=.8;
+    }
   }
+
+  has(id) { return this.modules.includes(id); }
+  get overloadCost() { return 22 + (this.has('ghost') ? 6 : 0) - (this.has('ram') ? 12 : 0) + (this.adaptation==='armor' ? 8 : 0); }
+  get patrolPeriod() { return this.adaptation==='hunter' ? 24 : 30; }
+  get patrolRisk() { return this.has('clock') ? 11 : 7; }
+  get scanCost() { return this.adaptation==='observer' ? 5 : 2; }
+  get coreSealed() { return this.final && !this.loot.some(x=>x.id===3||x.id===5); }
 
   code() { return Array.from({length: 4}, () => HEX[Math.floor(this.random() * 16)]).join(''); }
 
@@ -69,11 +85,11 @@ export class Run {
     this.trace = Math.min(100, this.trace + amount);
     if (this.trace >= 100) this.end(false, 'Сигнал раскрыт. SENTINEL закрыл соединение.');
   }
-  get passiveNoise() { return .24 + Math.min(this.sector, 8) * .05; }
-  get patrolIn() { return 30 - this.elapsed % 30; }
+  get passiveNoise() { return (.24 + Math.min(this.sector, 8) * .05) * (this.has('ghost') ? .6 : 1) * (this.has('ram') ? 1.5 : 1) * (this.anomaly.id==='blackout' ? .8 : 1); }
+  get patrolIn() { return this.patrolPeriod - this.elapsed % this.patrolPeriod; }
   get transferRisk() {
     const n = this.nodes[this.at];
-    return Math.ceil(n.noise * n.transferTime + Math.floor((this.elapsed % 30 + n.transferTime) / 30) * 7);
+    return Math.ceil(n.noise * n.transferTime + Math.floor((this.elapsed % this.patrolPeriod + n.transferTime) / this.patrolPeriod) * this.patrolRisk);
   }
 
   command(raw) {
@@ -102,7 +118,7 @@ export class Run {
     if (cmd === 'scan') {
       const first = !n.scanned;
       n.scanned = true;
-      if (first) this.risk(2);
+      if (first) this.risk(this.scanCost);
       return [
         this.log(`${n.name}: ${n.open ? 'канал открыт' : `ICE / проба ${n.probe}: ${n.same}/4 совпадений ПО ПОЗИЦИИ. Кандидаты: ${n.options.join(' · ')}`}`, 'success'),
         this.log(n.file ? `${n.file} / ${n.size} MB. Передача ${n.transferTime} сек., риск около +${this.transferRisk}% с учётом патруля.` : n.id === 4 ? 'Контроллер патруля. При взломе снижает тревогу на 22% (однократно).' : 'Транзитный узел. Архивов нет.'),
@@ -114,11 +130,12 @@ export class Run {
       if (!n.open && !target.visited) return [this.log('ICE блокирует продвижение. Взломай узел или отступи на посещённый.', 'warn')];
       this.at = target.id;
       target.visited = true;
-      this.risk(target.open ? 1 : 3);
+      this.risk(target.open ? (this.has('thread') ? 0 : 1) : (this.has('thread') ? 5 : 3));
       return [this.log(`Соединение: ${target.name}. ${target.open ? 'Канал открыт.' : 'Выполни scan для анализа ICE. Отступление доступно.'}`)];
     }
     if (cmd === 'breach' || cmd === 'overload') {
       if (n.open) return [this.log('Канал уже открыт.')];
+      if(n.id===6 && this.coreSealed)return [this.log('ROOT-ICE запечатан. Сначала скопируй один боковой архив: в нём ключ подписи HELIX.', 'warn')];
       if (cmd === 'breach') {
         if (!n.scanned) return [this.log('Сначала выполни scan.', 'warn')];
         if (arg !== n.key) {
@@ -128,10 +145,12 @@ export class Run {
           return [this.log(`Ключ отклонён. Тревога +14%. Совпадений с пробой ${n.probe}: ${matches(arg, n.probe)}/4, нужно ${n.same}/4.`, 'error')];
         }
       }
-      const cost = cmd === 'overload' ? 22 : n.breachRisk;
+      const cost = cmd === 'overload' ? this.overloadCost : n.breachRisk;
+      if(cmd==='overload')this.metrics.overloads++;
       this.risk(cost);
       if (this.phase !== 'active') return [this.log('Взлом раскрыл соединение.', 'error')];
       n.open = true;
+      if(cmd==='breach'&&this.has('leech'))this.trace=Math.max(0,this.trace-6);
       if (n.id === 4) this.trace = Math.max(0, this.trace - 22);
       return [this.log(`ICE отключён. Тревога +${cost}%.${n.id === 4 ? ' Контроллер подавлен: −22% тревоги.' : ''}`, 'success')];
     }
@@ -178,9 +197,9 @@ export class Run {
       this.end(false, 'Окно доступа закрыто. Время вышло.');
       return out;
     }
-    if (this.elapsed % 30 === 0) {
-      this.risk(7);
-      out.push(this.log('SENTINEL: патруль обновил сигнатуры. Тревога +7%.', 'error'));
+    if (this.elapsed % this.patrolPeriod === 0) {
+      this.risk(this.patrolRisk);
+      out.push(this.log(`SENTINEL: патруль обновил сигнатуры. Тревога +${this.patrolRisk}%.`, 'error'));
       if (this.phase !== 'active') return out;
     }
     if (this.transfer && --this.transfer.remaining <= 0) {

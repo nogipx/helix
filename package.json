@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test test/*.test.mjs",
-    "simulate": "node tools/simulate.mjs"
+    "simulate": "node tools/simulate.mjs",
+    "simulate:campaign": "node tools/simulate-campaign.mjs"
   }
 }

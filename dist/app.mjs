@@ -1,6 +1,6 @@
-import {Run} from './engine.mjs';
+import {Campaign, DAEMONS, ADAPTATIONS} from './rogue.mjs';
 const $=id=>document.getElementById(id);
-let run=new Run(), sector=1, started=false, history=[], historyIndex=0, sound=false, audio;
+let campaign=new Campaign(), run=campaign.current, sector=1, started=false, history=[], historyIndex=0, sound=false, audio;
 let best=0;try{best=Number(localStorage.getItem('qrm-best'))||0;}catch{}
 $('best').textContent=`ЛУЧШИЙ РЕЗУЛЬТАТ ${best||'—'}`;
 const points=[[85,220],[240,110],[240,330],[410,65],[410,220],[410,375],[570,220]];
@@ -12,7 +12,7 @@ function renderMap(){
 function suggestions(){if(!started||!['active','login'].includes(run.phase))return [];
  if(run.phase==='login')return [`login ${run.auth}`];
  const n=run.nodes[run.at];let cmds=[];
- if(!n.scanned)cmds.push('scan');else if(!n.open)cmds.push('overload');
+ if(!n.scanned)cmds.push('scan');else if(!n.open&&!(n.id===6&&run.coreSealed))cmds.push('overload');
  if(n.open&&n.file&&!n.taken)cmds.push('siphon');
  if(run.transfer)return ['abort'];
  cmds.push(...run.nodes.filter(x=>run.adjacent(x.id)&&(n.open||x.visited)).map(x=>`connect ${x.name}`));
@@ -23,15 +23,16 @@ function renderChallenge(){
  const n=run.nodes[run.at], panel=$('ice-challenge');
  const show=started&&run.phase==='active'&&n.scanned&&!n.open;
  panel.hidden=!show;
- const signature=JSON.stringify([run.at,show,n.guesses]);
+ const signature=JSON.stringify([run.at,show,n.guesses,n.probe,run.coreSealed]);
  if(panel.dataset.signature===signature)return;
  panel.dataset.signature=signature;
  if(!show)return;
  $('ice-clue').textContent=`Проба ${n.probe} → ${n.same}/4 совпадений по позиции`;
- $('ice-cost').textContent=`Верный ключ: +${n.breachRisk}% · ошибка: +14% · overload: +22%`;
+ $('ice-cost').textContent=`Верный ключ: +${n.breachRisk}% · ошибка: +14% · overload: +${run.overloadCost}%${run.has('leech')?' · возврат −6%':''}`;
+ if(n.id===6&&run.coreSealed)$('ice-cost').textContent='ROOT-ICE запечатан: сначала скопируй боковой архив.';
  $('ice-options').replaceChildren(...n.options.map(code=>{
   const button=document.createElement('button');button.textContent=code;
-  button.disabled=n.guesses.includes(code);button.onclick=()=>execute(`breach ${code}`);
+  button.disabled=n.guesses.includes(code)||(n.id===6&&run.coreSealed);button.onclick=()=>execute(`breach ${code}`);
   return button;
  }));
 }
@@ -46,7 +47,8 @@ function render(){
  const active=started&&run.phase==='active',n=run.nodes[run.at];
  $('phantom').disabled=!active||!run.phantom||!!run.transfer;$('phantom').firstChild.textContent=run.phantom?'СКРЫТЬ СИГНАТУРУ ':'ИСПОЛЬЗОВАНО ';
  $('connection').textContent=active?'CONNECTED':'OFFLINE';$('sector').textContent=String(sector).padStart(2,'0');
- $('map-state').textContent=active?`ПАТРУЛЬ ЧЕРЕЗ ${run.patrolIn} СЕК.`:'ОЖИДАНИЕ ДОСТУПА';$('node-name').textContent=n.name;$('node-status').textContent=!active?'АВТОРИЗАЦИЯ':n.open?'КАНАЛ ОТКРЫТ':'ICE АКТИВЕН';
+ renderBuild();
+ $('map-state').textContent=active?`ПАТРУЛЬ ЧЕРЕЗ ${run.patrolIn} СЕК.`:'ОЖИДАНИЕ ДОСТУПА';$('node-name').textContent=n.name;$('node-status').textContent=!active?(run.phase==='login'?'АВТОРИЗАЦИЯ':'ОТКЛЮЧЕНО'):n.open?'КАНАЛ ОТКРЫТ':'ICE АКТИВЕН';
  $('terminal-location').textContent=`ghost@${n.name.toLowerCase()}`;
  const shard=run.loot.some(x=>x.id===6);$('objective-dot').style.background=shard?'var(--accent)':'none';$('objective-text').textContent=shard?'quantum.shard / СКОПИРОВАН':'quantum.shard';
  $('transfer').hidden=!run.transfer;if(run.transfer){$('transfer').querySelector('progress').max=run.transfer.total;$('transfer').querySelector('progress').value=run.transfer.total-run.transfer.remaining;};
@@ -55,19 +57,77 @@ function render(){
  const commandSignature=JSON.stringify(commands);
  if($('commands').dataset.signature!==commandSignature){$('commands').dataset.signature=commandSignature;$('commands').replaceChildren(...commands.map(cmd=>{const b=document.createElement('button');b.textContent=cmd;b.disabled=false;b.onclick=()=>execute(cmd);return b;}));}
  renderChallenge();
- const mapSignature=JSON.stringify([run.at,run.nodes.map(n=>[n.open,n.taken,n.visited]),started]);
+ const mapSignature=JSON.stringify([run.at,run.nodes.map(n=>[n.open,n.taken,n.visited,n.size,n.transferTime]),run.links,started]);
  if($('network').dataset.signature!==mapSignature){$('network').dataset.signature=mapSignature;renderMap();}
  if(started&&['won','lost'].includes(run.phase)&&!$('result').open)finish();
 }
-function execute(raw){if(!raw.trim()||!started)return;if(raw.trim().toLowerCase()==='restart'){begin();return;}history.push(raw);historyIndex=history.length;add(`❯ ${raw}`,'command');run.command(raw).forEach(x=>{add(x.text,x.tone);beep(x.tone);});$('command').value='';render();if(!$('result').open)$('command').focus({preventScroll:true});}
-function begin(){last=performance.now();run=new Run(Math.random,sector);history=[];historyIndex=0;started=true;$('logs').replaceChildren();add('QUANTUM REALMS // NEURAL LINK v0.7\n--------------------------------\nHELIX CORP / RESTRICTED NETWORK','banner');add('Прокси-туннель установлен. Таймер запустится после авторизации.');add(`Перехвачен токен: ${run.auth}. Введи login ${run.auth}`,'success');add('ICE: найди кандидата с нужным числом совпадений по позиции. Кнопки не раскрывают ответ.');add(`Разведка: VAULT-A — ${run.nodes[3].size} MB / ${run.nodes[3].transferTime} сек.; VAULT-B — ${run.nodes[5].size} MB / ${run.nodes[5].transferTime} сек. SENTINEL — однократно −22% тревоги.`);render();$('command').focus();}
-function finish(){const win=run.phase==='won';$('result-label').textContent=win?'СОЕДИНЕНИЕ РАЗОРВАНО / ДАННЫЕ СОХРАНЕНЫ':'SENTINEL / СОЕДИНЕНИЕ ПОТЕРЯНО';$('result-title').textContent=win?(run.loot.some(n=>n.id===6)?'Цель выполнена.':'Добыча сохранена.'):'Операция провалена.';$('result-reason').textContent=run.reason;$('result-score').textContent=win?run.score:0;$('result-files').textContent=win?run.loot.map(n=>`${n.name} / ${n.size} MB`).join(' · '):'Незакреплённые данные потеряны. Новый туннель — новая попытка.';$('again').textContent=win?'СЛЕДУЮЩАЯ ОПЕРАЦИЯ ↗':'ПОВТОРИТЬ ОПЕРАЦИЮ ↗';if(win){best=Math.max(best,run.score);try{localStorage.setItem('qrm-best',String(best));}catch{}$('best').textContent=`ЛУЧШИЙ РЕЗУЛЬТАТ ${best}`;}$('result').showModal();}
+function execute(raw){if(!raw.trim()||!started)return;if(raw.trim().toLowerCase()==='restart'){begin(true);return;}history.push(raw);historyIndex=history.length;add(`❯ ${raw}`,'command');run.command(raw).forEach(x=>{add(x.text,x.tone);beep(x.tone);});$('command').value='';render();if(!$('result').open)$('command').focus({preventScroll:true});}
+function renderBuild(){
+ $('mission-description').textContent=run.final?'ФИНАЛ: скопируй боковой архив с подписью HELIX, вскрой QUANTUM и вернись в GATEWAY.':'Доберись до QUANTUM, скопируй Shard и вернись в GATEWAY. Затем выбери: уйти с добычей или погрузиться глубже.';
+ $('condition-details').textContent=`${run.anomaly.description} ${ADAPTATIONS[run.adaptation].description}`;
+ $('campaign-progress').textContent=`ПОГРУЖЕНИЕ ${sector} / 4${run.final?' · ROOT-ICE':''}`;
+ $('buffer-score').textContent=`${campaign.total} ОЧКОВ В БУФЕРЕ`;
+ $('sector-condition').textContent=`${run.anomaly.name} · ${ADAPTATIONS[run.adaptation].name}`;
+ $('sector-condition').title=`${run.anomaly.description} ${ADAPTATIONS[run.adaptation].description}`;
+ const signature=campaign.modules.join(',');
+ if($('installed').dataset.signature!==signature){
+  $('installed').dataset.signature=signature;
+  $('installed').replaceChildren(...campaign.modules.map(id=>{const d=DAEMONS.find(x=>x.id===id),el=document.createElement('span');el.className='daemon-chip';el.textContent=d.name;el.title=`${d.benefit} ${d.cost}`;return el;}));
+ }
+ $('empty-build').hidden=campaign.modules.length>0;
+}
+function begin(reset=false){
+ if(reset)campaign=new Campaign();
+ run=campaign.current;sector=campaign.sector;last=performance.now();history=[];historyIndex=0;started=true;
+ $('logs').replaceChildren();
+ add(`QUANTUM REALMS // ПОГРУЖЕНИЕ ${sector}/4\n--------------------------------`,'banner');
+ add(`Перехвачен токен: ${run.auth}. Введи login ${run.auth}`,'success');
+ add(`${run.anomaly.name}: ${run.anomaly.description}`,'warn');
+ add(`${ADAPTATIONS[run.adaptation].name}: ${ADAPTATIONS[run.adaptation].description}`);
+ if(run.final)add('ROOT-ICE: прежде чем вскрыть QUANTUM, скопируй хотя бы один боковой архив.','warn');
+ for(const id of campaign.modules){const d=DAEMONS.find(x=>x.id===id);add(`${d.name}: ${d.benefit} Цена: ${d.cost}`);}
+ add(`Разведка: VAULT-A — ${run.nodes[3].size} MB / ${run.nodes[3].transferTime} сек.; VAULT-B — ${run.nodes[5].size} MB / ${run.nodes[5].transferTime} сек. SENTINEL — однократно −22% тревоги.`);
+ add('ICE: сопоставь кандидатов с пробой по позиции. Для эвакуации вернись в GATEWAY.');
+ render();$('command').focus();
+}
+function finish(){
+ campaign.resolve();
+ const draft=campaign.stage==='draft',lost=campaign.stage==='lost',won=campaign.stage==='won';
+ $('result').classList.toggle('draft-dialog',draft);
+ $('result-label').textContent=draft?'УКРАДЕННЫЙ КОД / ВЫБЕРИ ОДНОГО ДЕМОНА':lost?'НЕЙРОКАНАЛ УНИЧТОЖЕН':'СОЕДИНЕНИЕ ЗАКРЫТО / ДОБЫЧА СОХРАНЕНА';
+ $('result-title').textContent=draft?'Забрать силу врага.':lost?'Забег потерян.':won?'Сердце HELIX остановлено.':'Ты вышел из сети.';
+ $('result-reason').textContent=draft?'Уйди с добычей или установи демона и рискни всем буфером в следующем секторе. Все модули действуют вместе.':lost?'Вся добыча забега и установленные демоны потеряны. Следующее погружение начнётся с чистой сигнатуры.':won?'Четыре слоя сети пройдены. Финальный бонус: 1000 очков.':run.reason;
+ $('result-score').textContent=campaign.total;
+ $('result-files').textContent=lost?'Буфер уничтожен. Рекорд предыдущих забегов сохранён.':run.loot.map(n=>`${n.name} / ${n.size} MB`).join(' · ');
+ $('draft').hidden=!draft;
+ $('offers').replaceChildren();
+ if(draft){
+  $('next-defense').textContent=`HELIX ЗАПОМНИЛ: ${ADAPTATIONS[campaign.adaptation].description}`;
+  for(const d of campaign.offers){
+   const button=document.createElement('button');button.className='daemon-card';
+   const tag=document.createElement('span');tag.className='daemon-tag';tag.textContent=d.tag;
+   const title=document.createElement('strong');title.textContent=d.name;
+   const benefit=document.createElement('p');benefit.textContent=d.benefit;
+   const cost=document.createElement('p');cost.className='daemon-cost';cost.textContent=d.cost;
+   const action=document.createElement('span');action.className='daemon-action';action.textContent='ВСТРОИТЬ И ПОГРУЗИТЬСЯ →';
+   button.append(tag,title,benefit,cost,action);
+   button.onclick=()=>{if(campaign.install(d.id)){$('result').close();begin();}};
+   $('offers').append(button);
+  }
+ }
+ $('again').textContent=draft?`УЙТИ И СОХРАНИТЬ ${campaign.total} ОЧКОВ ↗`:'НОВОЕ ПОГРУЖЕНИЕ ↗';
+ if(['won','cashed'].includes(campaign.stage)){
+  best=Math.max(best,campaign.total);try{localStorage.setItem('qrm-best',String(best));}catch{}
+  $('best').textContent=`ЛУЧШИЙ РЕЗУЛЬТАТ ${best}`;
+ }
+ renderBuild();$('result').showModal();
+}
 $('command-form').onsubmit=e=>{e.preventDefault();execute($('command').value);};
 $('command').onkeydown=e=>{if(e.key==='ArrowUp'){e.preventDefault();historyIndex=Math.max(0,historyIndex-1);e.target.value=history[historyIndex]||'';}if(e.key==='ArrowDown'){e.preventDefault();historyIndex=Math.min(history.length,historyIndex+1);e.target.value=history[historyIndex]||'';}if(e.key==='Tab'){e.preventDefault();const val=e.target.value.toLowerCase();const match=[...suggestions(),'scan','scrub','phantom','extract','help'].find(x=>x.toLowerCase().startsWith(val));if(match)e.target.value=match;}};
 function mapAction(e){const target=e.target.closest('[data-id]');if(target&&started&&run.phase==='active')execute(`connect ${run.nodes[Number(target.dataset.id)].name}`);}
 $('network').onclick=mapAction;$('network').onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();mapAction(e);}};
-$('start').onclick=()=>{$('briefing').close();begin();};$('again').onclick=()=>{if(run.phase==='won'&&run.loot.some(n=>n.id===6))sector++;$('result').close();begin();};
-$('restart').onclick=()=>{if(started&&['login','active'].includes(run.phase)){add('Чтобы завершить забег с добычей: extract. Для сброса введи restart.','warn');$('command').value='restart';$('command').focus();return;}sector=1;begin();};
+$('start').onclick=()=>{$('briefing').close();begin();};$('again').onclick=()=>{if(campaign.stage==='draft'){campaign.cashOut();$('result').close();finish();}else{$('result').close();begin(true);}};
+$('restart').onclick=()=>{if(started&&['login','active'].includes(run.phase)){add('Чтобы завершить забег с добычей: extract. Весь буфер забега будет потерян. Для сброса введи restart.','warn');$('command').value='restart';$('command').focus();return;}begin(true);};
 $('help').onclick=()=>{if(started)execute('help');else $('briefing').showModal();};$('phantom').onclick=()=>execute('phantom');
 $('sound').onclick=()=>{sound=!sound;$('sound').textContent=sound?'SOUND ON':'SOUND OFF';$('sound').setAttribute('aria-label',sound?'Выключить звук':'Включить звук');beep();};
 $('briefing').addEventListener('cancel',e=>{e.preventDefault();$('briefing').close();begin();});$('result').addEventListener('cancel',e=>e.preventDefault());
