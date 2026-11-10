@@ -1,11 +1,24 @@
 import {Campaign, DAEMONS, ADAPTATIONS} from './rogue.mjs';
+import {Results} from './results.mjs';
+let browserStorage;try{browserStorage=localStorage;}catch{}
+const results=new Results(browserStorage);
+let campaignId=crypto.randomUUID();
 const $=id=>document.getElementById(id);
 let campaign=new Campaign(), run=campaign.current, sector=1, started=false, history=[], historyIndex=0, sound=false, audio;
 let best=0;try{best=Number(localStorage.getItem('qrm-best'))||0;}catch{}
 $('best').textContent=`ЛУЧШИЙ РЕЗУЛЬТАТ ${best||'—'}`;
 const points=[[85,220],[240,110],[240,330],[410,65],[410,220],[410,375],[570,220]];
 function beep(type='info'){if(!sound)return;try{audio??=new AudioContext();audio.resume();const o=audio.createOscillator(),g=audio.createGain();o.type='sine';o.frequency.value=type==='error'?150:680;g.gain.setValueAtTime(.035,audio.currentTime);g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+.1);o.connect(g).connect(audio.destination);o.start();o.stop(audio.currentTime+.1);}catch{}}
-function add(text,tone='info'){const line=document.createElement('div');line.className=`log ${tone}`;const time=document.createElement('time');time.textContent=started?new Date(run.elapsed*1000).toISOString().slice(14,19):'SYS';const p=document.createElement('p');p.textContent=text;line.append(time,p);$('logs').append(line);$('logs').scrollTop=$('logs').scrollHeight;}
+function add(text,tone='info'){
+ const logs=$('logs');
+ const follow=logs.scrollHeight-logs.clientHeight-logs.scrollTop<32;
+ const line=document.createElement('div');line.className=`log ${tone}`;
+ const time=document.createElement('time');time.textContent=started?new Date(run.elapsed*1000).toISOString().slice(14,19):'SYS';
+ const p=document.createElement('p');p.textContent=text;line.append(time,p);logs.append(line);
+ if(follow)logs.scrollTop=logs.scrollHeight;else $('latest-log').hidden=false;
+}
+$('logs').addEventListener('scroll',()=>{if($('logs').scrollHeight-$('logs').clientHeight-$('logs').scrollTop<32)$('latest-log').hidden=true;});
+$('latest-log').onclick=()=>{$('logs').scrollTop=$('logs').scrollHeight;$('latest-log').hidden=true;};
 function renderMap(){
  $('network').innerHTML=run.links.map(([a,b])=>`<line class="edge ${a===run.at||b===run.at?'traversable':''}" x1="${points[a][0]}" y1="${points[a][1]}" x2="${points[b][0]}" y2="${points[b][1]}"/>`).join('')+run.nodes.map((n)=>{const [x,y]=points[n.id],current=n.id===run.at;return `<g class="map-node ${current?'current':''}" transform="translate(${x},${y})" data-id="${n.id}" role="button" tabindex="0" aria-label="${n.name}${current?', текущий узел':run.adjacent(n.id)?', доступен для подключения':', нет прямого соединения'}"><rect class="outer" x="-29" y="-29" width="58" height="58" rx="10" ${current?'':'visibility="hidden"'}/><rect x="-23" y="-23" width="46" height="46" rx="5"/><text class="node-glyph" text-anchor="middle" y="7">${n.taken?'✓':n.id===6?'◈':n.file?'▤':n.open?'⌘':'×'}</text>${n.file&&!n.taken?'<circle class="loot-dot" cx="23" cy="-23" r="3"/>':''}<text text-anchor="middle" y="44">${n.name}</text><text class="subtext" text-anchor="middle" y="58">${n.taken?'СКОПИРОВАНО':n.id===0?'ТОЧКА ВХОДА':n.file?`${n.size} MB / ${n.transferTime} СЕК.`:n.id===4?'ТРЕВОГА −22%':n.open?'ДОСТУП ОТКРЫТ':'ICE / АКТИВЕН'}</text></g>`;}).join('');
 }
@@ -62,7 +75,7 @@ function render(){
  if($('network').dataset.signature!==mapSignature){$('network').dataset.signature=mapSignature;renderMap();}
  if(started&&['won','lost'].includes(run.phase)&&!$('result').open)finish();
 }
-function execute(raw){if(!raw.trim()||!started)return;if(raw.trim().toLowerCase()==='restart'){begin(true);return;}history.push(raw);historyIndex=history.length;add(`❯ ${raw}`,'command');run.command(raw).forEach(x=>{add(x.text,x.tone);beep(x.tone);});$('command').value='';render();if(!$('result').open)$('command').focus({preventScroll:true});}
+function execute(raw){if(!raw.trim()||!started)return;const follow=$('logs').scrollHeight-$('logs').clientHeight-$('logs').scrollTop<32;if(raw.trim().toLowerCase()==='restart'){begin(true);return;}history.push(raw);historyIndex=history.length;add(`❯ ${raw}`,'command');run.command(raw).forEach(x=>{add(x.text,x.tone);beep(x.tone);});$('command').value='';render();if(follow)$('logs').scrollTop=$('logs').scrollHeight;if(!$('result').open)$('command').focus({preventScroll:true});}
 function renderBuild(){
  $('mission-description').textContent=run.final?'ФИНАЛ: скопируй боковой архив с подписью HELIX, вскрой QUANTUM и вернись в GATEWAY.':'Доберись до QUANTUM, скопируй Shard и вернись в GATEWAY. Затем выбери: уйти с добычей или погрузиться глубже.';
  $('condition-details').textContent=`${run.anomaly.description} ${ADAPTATIONS[run.adaptation].description}`;
@@ -78,9 +91,9 @@ function renderBuild(){
  $('empty-build').hidden=campaign.modules.length>0;
 }
 function begin(reset=false){
- if(reset)campaign=new Campaign();
+ if(reset){campaign=new Campaign();campaignId=crypto.randomUUID();}
  run=campaign.current;sector=campaign.sector;last=performance.now();history=[];historyIndex=0;started=true;
- $('logs').replaceChildren();
+ $('logs').replaceChildren();$('latest-log').hidden=true;
  add(`QUANTUM REALMS // ПОГРУЖЕНИЕ ${sector}/4\n--------------------------------`,'banner');
  add(`Перехвачен токен: ${run.auth}. Введи login ${run.auth}`,'success');
  add(`${run.anomaly.name}: ${run.anomaly.description}`,'warn');
@@ -89,9 +102,10 @@ function begin(reset=false){
  for(const id of campaign.modules){const d=DAEMONS.find(x=>x.id===id);add(`${d.name}: ${d.benefit} Цена: ${d.cost}`);}
  add(`Разведка: VAULT-A — ${run.nodes[3].size} MB / ${run.nodes[3].transferTime} сек.; VAULT-B — ${run.nodes[5].size} MB / ${run.nodes[5].transferTime} сек. SENTINEL — однократно −22% тревоги.`);
  add('ICE: сопоставь кандидатов с пробой по позиции. Для эвакуации вернись в GATEWAY.');
- render();$('command').focus();
+ render();$('logs').scrollTop=$('logs').scrollHeight;$('command').focus({preventScroll:true});
 }
 function finish(){
+ for(const id of ['ice-guide-dialog','results-dialog'])if($(id).open)$(id).close();
  campaign.resolve();
  const draft=campaign.stage==='draft',lost=campaign.stage==='lost',won=campaign.stage==='won';
  $('result').classList.toggle('draft-dialog',draft);
@@ -117,12 +131,31 @@ function finish(){
   }
  }
  $('again').textContent=draft?`УЙТИ И СОХРАНИТЬ ${campaign.total} ОЧКОВ ↗`:'НОВОЕ ПОГРУЖЕНИЕ ↗';
+ if(['won','cashed','lost'].includes(campaign.stage)){results.add({id:campaignId,date:new Date().toISOString(),status:campaign.stage,score:campaign.total,sector:campaign.sector,modules:campaign.modules.map(id=>DAEMONS.find(d=>d.id===id).name),reason:run.reason||''});}
  if(['won','cashed'].includes(campaign.stage)){
   best=Math.max(best,campaign.total);try{localStorage.setItem('qrm-best',String(best));}catch{}
   $('best').textContent=`ЛУЧШИЙ РЕЗУЛЬТАТ ${best}`;
  }
  renderBuild();$('result').showModal();
 }
+$('show-ice-guide').onclick=()=>$('ice-guide-dialog').showModal();
+$('close-ice-guide').onclick=()=>$('ice-guide-dialog').close();
+$('show-results').onclick=()=>{
+ $('results-summary').textContent=results.entries.length?`${results.entries.length} завершённых забегов · лучший результат ${Math.max(best,...results.entries.map(x=>x.score))}`:'Здесь появятся завершённые забеги. После сектора выбери выход с добычей или пройди все четыре слоя.';
+ if(!results.saved)$('results-summary').textContent+=' Браузер не разрешил сохранить журнал: записи доступны только до перезагрузки.';
+ $('results-list').replaceChildren(...results.entries.map(entry=>{
+  const article=document.createElement('article');article.className='saved-result';
+  const heading=document.createElement('div');heading.className='saved-result-heading';
+  const title=document.createElement('strong');title.textContent=entry.status==='won'?'HELIX повержен':entry.status==='lost'?'Забег потерян':'Выход с добычей';
+  const score=document.createElement('span');score.textContent=`${entry.score} очков`;
+  heading.append(title,score);
+  const details=document.createElement('p');details.textContent=`${new Date(entry.date).toLocaleString('ru-RU',{dateStyle:'short',timeStyle:'short'})} · Сектор ${entry.sector}/4`;
+  const modules=document.createElement('p');modules.textContent=entry.modules.length?entry.modules.join(' · '):'Без демонов';
+  article.append(heading,details,modules);return article;
+ }));
+ $('results-dialog').showModal();
+};
+$('close-results').onclick=()=>$('results-dialog').close();
 $('command-form').onsubmit=e=>{e.preventDefault();execute($('command').value);};
 $('command').onkeydown=e=>{if(e.key==='ArrowUp'){e.preventDefault();historyIndex=Math.max(0,historyIndex-1);e.target.value=history[historyIndex]||'';}if(e.key==='ArrowDown'){e.preventDefault();historyIndex=Math.min(history.length,historyIndex+1);e.target.value=history[historyIndex]||'';}if(e.key==='Tab'){e.preventDefault();const val=e.target.value.toLowerCase();const match=[...suggestions(),'scan','scrub','phantom','extract','help'].find(x=>x.toLowerCase().startsWith(val));if(match)e.target.value=match;}};
 function mapAction(e){const target=e.target.closest('[data-id]');if(target&&started&&run.phase==='active')execute(`connect ${run.nodes[Number(target.dataset.id)].name}`);}
