@@ -51,4 +51,4 @@ npm start
 
 [CI](.github/workflows/pages.yml) запускается на PR и push в `main`: проверяет синтаксис модулей и выполняет тесты. После успешной проверки `main` публикует каталог `dist` через официальный Pages artifact/deploy workflow. Установка пакетов и сборка не нужны — игра не имеет npm-зависимостей. Доступен ручной запуск через Actions → Test and deploy Pages → Run workflow.
 
-Домен: `helix.nogipx.dev`, сохранён в `dist/CNAME`. В Settings → Pages источником должен оставаться GitHub Actions. Workflow использует штатный `GITHUB_TOKEN` и OIDC; отдельные секреты не нужны. Права публикации получает только deploy job, PR выполняет проверки без публикации. Версии actions закреплены SHA.
+Адрес игры: https://nogipx.github.io/helix/. Пользовательский домен не используется. В Settings → Pages источником должен оставаться GitHub Actions. Workflow использует штатный `GITHUB_TOKEN` и OIDC; отдельные секреты не нужны. Права публикации получает только deploy job, PR выполняет проверки без публикации. Версии actions закреплены SHA.
