@@ -7,6 +7,7 @@ const $=id=>document.getElementById(id);
 let campaign=new Campaign(), run=campaign.current, sector=1, started=false, history=[], historyIndex=0, sound=false, audio;
 let best=0;try{best=Number(localStorage.getItem('qrm-best'))||0;}catch{}
 $('best').textContent=`ЛУЧШИЙ РЕЗУЛЬТАТ ${best||'—'}`;
+let resultsPage=0, offerIndex=0, followWhenReturning=true;
 const points=[[85,220],[240,110],[240,330],[410,65],[410,220],[410,375],[570,220]];
 function beep(type='info'){if(!sound)return;try{audio??=new AudioContext();audio.resume();const o=audio.createOscillator(),g=audio.createGain();o.type='sine';o.frequency.value=type==='error'?150:680;g.gain.setValueAtTime(.035,audio.currentTime);g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+.1);o.connect(g).connect(audio.destination);o.start();o.stop(audio.currentTime+.1);}catch{}}
 function add(text,tone='info'){
@@ -75,7 +76,7 @@ function render(){
  if($('network').dataset.signature!==mapSignature){$('network').dataset.signature=mapSignature;renderMap();}
  if(started&&['won','lost'].includes(run.phase)&&!$('result').open)finish();
 }
-function execute(raw){if(!raw.trim()||!started)return;const follow=$('logs').scrollHeight-$('logs').clientHeight-$('logs').scrollTop<32;if(raw.trim().toLowerCase()==='restart'){begin(true);return;}history.push(raw);historyIndex=history.length;add(`❯ ${raw}`,'command');run.command(raw).forEach(x=>{add(x.text,x.tone);beep(x.tone);});$('command').value='';render();if(follow)$('logs').scrollTop=$('logs').scrollHeight;if(!$('result').open)$('command').focus({preventScroll:true});}
+function execute(raw){if(!raw.trim()||!started)return;const follow=$('logs').scrollHeight-$('logs').clientHeight-$('logs').scrollTop<32;if(raw.trim().toLowerCase()==='restart'){begin(true);return;}history.push(raw);historyIndex=history.length;add(`❯ ${raw}`,'command');run.command(raw).forEach(x=>{add(x.text,x.tone);beep(x.tone);});$('command').value='';render();if(follow)$('logs').scrollTop=$('logs').scrollHeight;if(!$('result').open&&matchMedia('(min-width:761px)').matches)$('command').focus({preventScroll:true});}
 function renderBuild(){
  $('mission-description').textContent=run.final?'ФИНАЛ: скопируй боковой архив с подписью HELIX, вскрой QUANTUM и вернись в GATEWAY.':'Доберись до QUANTUM, скопируй Shard и вернись в GATEWAY. Затем выбери: уйти с добычей или погрузиться глубже.';
  $('condition-details').textContent=`${run.anomaly.description} ${ADAPTATIONS[run.adaptation].description}`;
@@ -102,10 +103,10 @@ function begin(reset=false){
  for(const id of campaign.modules){const d=DAEMONS.find(x=>x.id===id);add(`${d.name}: ${d.benefit} Цена: ${d.cost}`);}
  add(`Разведка: VAULT-A — ${run.nodes[3].size} MB / ${run.nodes[3].transferTime} сек.; VAULT-B — ${run.nodes[5].size} MB / ${run.nodes[5].transferTime} сек. SENTINEL — однократно −22% тревоги.`);
  add('ICE: сопоставь кандидатов с пробой по позиции. Для эвакуации вернись в GATEWAY.');
- render();$('logs').scrollTop=$('logs').scrollHeight;$('command').focus({preventScroll:true});
+ setView('terminal');render();$('logs').scrollTop=$('logs').scrollHeight;if(matchMedia('(min-width:761px)').matches)$('command').focus({preventScroll:true});
 }
 function finish(){
- for(const id of ['ice-guide-dialog','results-dialog'])if($(id).open)$(id).close();
+ for(const id of ['ice-guide-dialog','results-dialog','conditions-dialog'])if($(id).open)$(id).close();
  campaign.resolve();
  const draft=campaign.stage==='draft',lost=campaign.stage==='lost',won=campaign.stage==='won';
  $('result').classList.toggle('draft-dialog',draft);
@@ -115,11 +116,11 @@ function finish(){
  $('result-score').textContent=campaign.total;
  $('result-files').textContent=lost?'Буфер уничтожен. Рекорд предыдущих забегов сохранён.':run.loot.map(n=>`${n.name} / ${n.size} MB`).join(' · ');
  $('draft').hidden=!draft;
- $('offers').replaceChildren();
+ $('offers').replaceChildren();offerIndex=0;
  if(draft){
   $('next-defense').textContent=`HELIX ЗАПОМНИЛ: ${ADAPTATIONS[campaign.adaptation].description}`;
   for(const d of campaign.offers){
-   const button=document.createElement('button');button.className='daemon-card';
+   const button=document.createElement('button');button.className='daemon-card';button.dataset.current=String($('offers').children.length===0);
    const tag=document.createElement('span');tag.className='daemon-tag';tag.textContent=d.tag;
    const title=document.createElement('strong');title.textContent=d.name;
    const benefit=document.createElement('p');benefit.textContent=d.benefit;
@@ -136,14 +137,62 @@ function finish(){
   best=Math.max(best,campaign.total);try{localStorage.setItem('qrm-best',String(best));}catch{}
   $('best').textContent=`ЛУЧШИЙ РЕЗУЛЬТАТ ${best}`;
  }
+ $('offer-page').textContent=`1 / ${campaign.offers.length}`;
  renderBuild();$('result').showModal();
 }
+function setView(view){
+ const workspace=document.querySelector('.workspace');
+ if(workspace.dataset.view==='terminal')followWhenReturning=$('logs').scrollHeight-$('logs').clientHeight-$('logs').scrollTop<32;
+ workspace.dataset.view=view;
+ $('tab-terminal').setAttribute('aria-pressed',String(view==='terminal'));
+ $('tab-network').setAttribute('aria-pressed',String(view==='network'));
+ if(view==='terminal'&&followWhenReturning)$('logs').scrollTop=$('logs').scrollHeight;
+}
+function fitViewport(){
+ const height=window.visualViewport?.height||innerHeight;
+ document.documentElement.style.setProperty('--game-height',`${height}px`);
+ document.body.classList.toggle('keyboard-open',height<innerHeight*.75);
+}
+window.visualViewport?.addEventListener('resize',fitViewport);
+window.addEventListener('resize',fitViewport);
+fitViewport();
+$('tab-terminal').onclick=()=>setView('terminal');
+$('tab-network').onclick=()=>setView('network');
+function selectOffer(offset){
+ const cards=[...$('offers').children];
+ if(!cards.length)return;
+ offerIndex=(offerIndex+offset+cards.length)%cards.length;
+ cards.forEach((card,i)=>card.dataset.current=String(i===offerIndex));
+ $('offer-page').textContent=`${offerIndex+1} / ${cards.length}`;
+}
+$('offer-prev').onclick=()=>selectOffer(-1);
+$('offer-next').onclick=()=>selectOffer(1);
+$('fullscreen').hidden=!document.fullscreenEnabled;
+$('fullscreen').onclick=async()=>{
+ try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}
+ catch{$('fullscreen').title='Браузер не разрешил полноэкранный режим';}
+};
+document.addEventListener('fullscreenchange',()=>{$('fullscreen').textContent=document.fullscreenElement?'СВЕРНУТЬ':'НА ВЕСЬ ЭКРАН';});
+$('show-conditions').onclick=()=>{
+ $('conditions-text').textContent=`${run.anomaly.name}: ${run.anomaly.description} ${ADAPTATIONS[run.adaptation].name}: ${ADAPTATIONS[run.adaptation].description}`;
+ $('conditions-modules').replaceChildren(...campaign.modules.map(id=>{
+  const d=DAEMONS.find(x=>x.id===id),el=document.createElement('article'),name=document.createElement('strong'),text=document.createElement('p');
+  name.textContent=d.name;text.textContent=`${d.benefit} ${d.cost}`;el.append(name,text);return el;
+ }));
+ $('conditions-dialog').showModal();
+};
+$('close-conditions').onclick=()=>$('conditions-dialog').close();
 $('show-ice-guide').onclick=()=>$('ice-guide-dialog').showModal();
 $('close-ice-guide').onclick=()=>$('ice-guide-dialog').close();
-$('show-results').onclick=()=>{
+function renderResults(){
+ const perPage=innerHeight<600?1:3;
+ const pages=Math.max(1,Math.ceil(results.entries.length/perPage));
+ resultsPage=Math.min(resultsPage,pages-1);
+ $('results-page').textContent=`${resultsPage+1} / ${pages}`;
+ $('results-prev').disabled=resultsPage===0;$('results-next').disabled=resultsPage===pages-1;
  $('results-summary').textContent=results.entries.length?`${results.entries.length} завершённых забегов · лучший результат ${Math.max(best,...results.entries.map(x=>x.score))}`:'Здесь появятся завершённые забеги. После сектора выбери выход с добычей или пройди все четыре слоя.';
  if(!results.saved)$('results-summary').textContent+=' Браузер не разрешил сохранить журнал: записи доступны только до перезагрузки.';
- $('results-list').replaceChildren(...results.entries.map(entry=>{
+ $('results-list').replaceChildren(...results.entries.slice(resultsPage*perPage,(resultsPage+1)*perPage).map(entry=>{
   const article=document.createElement('article');article.className='saved-result';
   const heading=document.createElement('div');heading.className='saved-result-heading';
   const title=document.createElement('strong');title.textContent=entry.status==='won'?'HELIX повержен':entry.status==='lost'?'Забег потерян':'Выход с добычей';
@@ -153,12 +202,15 @@ $('show-results').onclick=()=>{
   const modules=document.createElement('p');modules.textContent=entry.modules.length?entry.modules.join(' · '):'Без демонов';
   article.append(heading,details,modules);return article;
  }));
- $('results-dialog').showModal();
-};
+}
+$('show-results').onclick=()=>{resultsPage=0;renderResults();$('results-dialog').showModal();};
+$('results-prev').onclick=()=>{resultsPage--;renderResults();};
+$('results-next').onclick=()=>{resultsPage++;renderResults();};
+window.addEventListener('resize',()=>{if($('results-dialog').open)renderResults();});
 $('close-results').onclick=()=>$('results-dialog').close();
 $('command-form').onsubmit=e=>{e.preventDefault();execute($('command').value);};
 $('command').onkeydown=e=>{if(e.key==='ArrowUp'){e.preventDefault();historyIndex=Math.max(0,historyIndex-1);e.target.value=history[historyIndex]||'';}if(e.key==='ArrowDown'){e.preventDefault();historyIndex=Math.min(history.length,historyIndex+1);e.target.value=history[historyIndex]||'';}if(e.key==='Tab'){e.preventDefault();const val=e.target.value.toLowerCase();const match=[...suggestions(),'scan','scrub','phantom','extract','help'].find(x=>x.toLowerCase().startsWith(val));if(match)e.target.value=match;}};
-function mapAction(e){const target=e.target.closest('[data-id]');if(target&&started&&run.phase==='active')execute(`connect ${run.nodes[Number(target.dataset.id)].name}`);}
+function mapAction(e){const target=e.target.closest('[data-id]');if(target&&started&&run.phase==='active'){execute(`connect ${run.nodes[Number(target.dataset.id)].name}`);setView('terminal');}}
 $('network').onclick=mapAction;$('network').onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();mapAction(e);}};
 $('start').onclick=()=>{$('briefing').close();begin();};$('again').onclick=()=>{if(campaign.stage==='draft'){campaign.cashOut();$('result').close();finish();}else{$('result').close();begin(true);}};
 $('restart').onclick=()=>{if(started&&['login','active'].includes(run.phase)){add('Чтобы завершить забег с добычей: extract. Весь буфер забега будет потерян. Для сброса введи restart.','warn');$('command').value='restart';$('command').focus();return;}begin(true);};
