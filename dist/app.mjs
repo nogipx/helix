@@ -1,13 +1,15 @@
 import {Campaign, DAEMONS, ADAPTATIONS} from './rogue.mjs';
+import {Account, TOOLS} from './economy.mjs';
 import {Results} from './results.mjs';
 let browserStorage;try{browserStorage=localStorage;}catch{}
 const results=new Results(browserStorage);
+const account=new Account(browserStorage);
 let campaignId=crypto.randomUUID();
 const $=id=>document.getElementById(id);
-let campaign=new Campaign(), run=campaign.current, sector=1, started=false, history=[], historyIndex=0, sound=false, audio;
-let best=0;try{best=Number(localStorage.getItem('qrm-best'))||0;}catch{}
-$('best').textContent=`ЛУЧШИЙ РЕЗУЛЬТАТ ${best||'—'}`;
-let resultsPage=0, offerIndex=0, followWhenReturning=true;
+let campaign=new Campaign(Math.random,{inventory:account.inventory}), run=campaign.current, sector=1, started=false, history=[], historyIndex=0, sound=false, audio;
+let best=0;try{best=Number(localStorage.getItem('qrm-earnings-best'))||0;}catch{}
+$('best').textContent=`ЛУЧШАЯ ВЫРУЧКА ${best||'—'} Cr`;
+let resultsPage=0, offerIndex=0, followWhenReturning=true, shopIndex=0;
 const points=[[85,220],[240,110],[240,330],[410,65],[410,220],[410,375],[570,220]];
 function beep(type='info'){if(!sound)return;try{audio??=new AudioContext();audio.resume();const o=audio.createOscillator(),g=audio.createGain();o.type='sine';o.frequency.value=type==='error'?150:680;g.gain.setValueAtTime(.035,audio.currentTime);g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+.1);o.connect(g).connect(audio.destination);o.start();o.stop(audio.currentTime+.1);}catch{}}
 function add(text,tone='info'){
@@ -21,15 +23,25 @@ function add(text,tone='info'){
 $('logs').addEventListener('scroll',()=>{if($('logs').scrollHeight-$('logs').clientHeight-$('logs').scrollTop<32)$('latest-log').hidden=true;});
 $('latest-log').onclick=()=>{$('logs').scrollTop=$('logs').scrollHeight;$('latest-log').hidden=true;};
 function renderMap(){
- $('network').innerHTML=run.links.map(([a,b])=>`<line class="edge ${a===run.at||b===run.at?'traversable':''}" x1="${points[a][0]}" y1="${points[a][1]}" x2="${points[b][0]}" y2="${points[b][1]}"/>`).join('')+run.nodes.map((n)=>{const [x,y]=points[n.id],current=n.id===run.at;return `<g class="map-node ${current?'current':''}" transform="translate(${x},${y})" data-id="${n.id}" role="button" tabindex="0" aria-label="${n.name}${current?', текущий узел':run.adjacent(n.id)?', доступен для подключения':', нет прямого соединения'}"><rect class="outer" x="-29" y="-29" width="58" height="58" rx="10" ${current?'':'visibility="hidden"'}/><rect x="-23" y="-23" width="46" height="46" rx="5"/><text class="node-glyph" text-anchor="middle" y="7">${n.taken?'✓':n.id===6?'◈':n.file?'▤':n.open?'⌘':'×'}</text>${n.file&&!n.taken?'<circle class="loot-dot" cx="23" cy="-23" r="3"/>':''}<text text-anchor="middle" y="44">${n.name}</text><text class="subtext" text-anchor="middle" y="58">${n.taken?'СКОПИРОВАНО':n.id===0?'ТОЧКА ВХОДА':n.file?`${n.size} MB / ${n.transferTime} СЕК.`:n.id===4?'ТРЕВОГА −22%':n.open?'ДОСТУП ОТКРЫТ':'ICE / АКТИВЕН'}</text></g>`;}).join('');
+ const layout=run.layoutOrder.map(i=>points[i]);
+ const labels=n=>run.label(n);
+ $('network').innerHTML=run.links.filter(([a,b])=>run.knownRoute(a,b)).map(([a,b])=>`<line class="edge ${a===run.at||b===run.at?'traversable':''}" x1="${layout[a][0]}" y1="${layout[a][1]}" x2="${layout[b][0]}" y2="${layout[b][1]}"/>`).join('')+run.nodes.filter(n=>run.discovered.has(n.id)).map(n=>{
+  const[x,y]=layout[n.id],current=n.id===run.at;
+  const detail=n.taken?'ПРОДАТЬ НА ВЫХОДЕ':!n.scanned?(n.id===0?'recon / РАЗВЕДКА':'НЕ ИССЛЕДОВАН'):n.file?`${n.size} MB / ${n.transferTime} СЕК.`:n.id===4?'ТРЕВОГА −22%':n.open?'КАНАЛ ОТКРЫТ':'ICE';
+  const glyph=n.taken?'✓':!n.scanned&&!n.identified&&n.id!==0?'?':n.id===6?'◈':n.file?'▤':n.open?'⌘':'×';
+  return `<g class="map-node ${current?'current':''}" transform="translate(${x},${y})" data-id="${n.id}" role="button" tabindex="0" aria-label="${labels(n)}"><rect class="outer" x="-29" y="-29" width="58" height="58" rx="10" ${current?'':'visibility="hidden"'}/><rect x="-23" y="-23" width="46" height="46" rx="5"/><text class="node-glyph" text-anchor="middle" y="7">${glyph}</text><text text-anchor="middle" y="44">${labels(n)}</text><text class="subtext" text-anchor="middle" y="58">${detail}</text></g>`;
+ }).join('');
+ $('fog-hint').hidden=run.discovered.size>1;
 }
 function suggestions(){if(!started||!['active','login'].includes(run.phase))return [];
  if(run.phase==='login')return [`login ${run.auth}`];
  const n=run.nodes[run.at];let cmds=[];
+ if(n.open&&!run.reconned.has(run.at))cmds.push('recon');
  if(!n.scanned)cmds.push('scan');else if(!n.open&&!(n.id===6&&run.coreSealed))cmds.push('overload');
- if(n.open&&n.file&&!n.taken)cmds.push('siphon');
+ if(n.open&&n.scanned&&n.file&&!n.taken)cmds.push('siphon');
  if(run.transfer)return ['abort'];
- cmds.push(...run.nodes.filter(x=>run.adjacent(x.id)&&(n.open||x.visited)).map(x=>`connect ${x.name}`));
+ cmds.push(...run.nodes.filter(x=>run.knownRoute(run.at,x.id)&&(n.open||x.visited)).map(x=>`connect ${x.address}`));
+ for(const t of TOOLS)if(account.inventory[t.id])cmds.push(`use ${t.id}`);
  if(run.trace>15&&run.cooldown===0)cmds.push('scrub');if(run.loot.length&&run.at===0)cmds.push('extract');return cmds;
 }
 
@@ -43,7 +55,7 @@ function renderChallenge(){
  if(!show)return;
  $('ice-clue').textContent=`Проба ${n.probe} → ${n.same}/4 совпадений по позиции`;
  $('ice-instruction').textContent=`Выбери вариант, в котором с пробой совпадают ровно ${n.same} из 4 символов на тех же местах. Нажатие отправляет ответ.`;
- $('ice-cost').textContent=`Верный ключ: +${n.breachRisk}% · ошибка: +14% · overload: +${run.overloadCost}%${run.has('leech')?' · возврат −6%':''}`;
+ $('ice-cost').textContent=`Верный ключ: +${n.breachRisk}% · ошибка: +14%, −1 нейро · overload: +${run.overloadCost}%${run.has('leech')?' · возврат −6%':''}`;
  if(n.id===6&&run.coreSealed)$('ice-cost').textContent='ROOT-ICE запечатан: сначала скопируй боковой архив.';
  $('ice-options').replaceChildren(...n.options.map(code=>{
   const button=document.createElement('button');button.textContent=code;
@@ -63,8 +75,8 @@ function render(){
  $('phantom').disabled=!active||!run.phantom||!!run.transfer;$('phantom').firstChild.textContent=run.phantom?'СКРЫТЬ СИГНАТУРУ ':'ИСПОЛЬЗОВАНО ';
  $('connection').textContent=active?'CONNECTED':'OFFLINE';$('sector').textContent=String(sector).padStart(2,'0');
  renderBuild();
- $('map-state').textContent=active?`ПАТРУЛЬ ЧЕРЕЗ ${run.patrolIn} СЕК.`:'ОЖИДАНИЕ ДОСТУПА';$('node-name').textContent=n.name;$('node-status').textContent=!active?(run.phase==='login'?'АВТОРИЗАЦИЯ':'ОТКЛЮЧЕНО'):n.open?'КАНАЛ ОТКРЫТ':'ICE АКТИВЕН';
- $('terminal-location').textContent=`ghost@${n.name.toLowerCase()}`;
+ $('map-state').textContent=active?`ПАТРУЛЬ ЧЕРЕЗ ${run.patrolIn} СЕК.`:'ОЖИДАНИЕ ДОСТУПА';$('node-name').textContent=run.label(n);$('node-status').textContent=!active?(run.phase==='login'?'АВТОРИЗАЦИЯ':'ОТКЛЮЧЕНО'):n.open?'КАНАЛ ОТКРЫТ':'ICE АКТИВЕН';
+ $('terminal-location').textContent=`ghost@${run.label(n).toLowerCase()}`;
  const shard=run.loot.some(x=>x.id===6);$('objective-dot').style.background=shard?'var(--accent)':'none';$('objective-text').textContent=shard?'quantum.shard / СКОПИРОВАН':'quantum.shard';
  $('transfer').hidden=!run.transfer;if(run.transfer){$('transfer').querySelector('progress').max=run.transfer.total;$('transfer').querySelector('progress').value=run.transfer.total-run.transfer.remaining;};
  $('command').disabled=!started||!['login','active'].includes(run.phase);$('command-form').querySelector('button').disabled=$('command').disabled;
@@ -72,17 +84,19 @@ function render(){
  const commandSignature=JSON.stringify(commands);
  if($('commands').dataset.signature!==commandSignature){$('commands').dataset.signature=commandSignature;$('commands').replaceChildren(...commands.map(cmd=>{const b=document.createElement('button');b.textContent=cmd;b.disabled=false;b.onclick=()=>execute(cmd);return b;}));}
  renderChallenge();
- const mapSignature=JSON.stringify([run.at,run.nodes.map(n=>[n.open,n.taken,n.visited,n.size,n.transferTime]),run.links,started]);
+ const mapSignature=JSON.stringify([run.at,run.nodes.map(n=>[n.open,n.taken,n.visited,n.scanned,n.identified,n.size,n.transferTime]),[...run.revealedEdges],[...run.discovered],started]);
  if($('network').dataset.signature!==mapSignature){$('network').dataset.signature=mapSignature;renderMap();}
  if(started&&['won','lost'].includes(run.phase)&&!$('result').open)finish();
 }
-function execute(raw){if(!raw.trim()||!started)return;const follow=$('logs').scrollHeight-$('logs').clientHeight-$('logs').scrollTop<32;if(raw.trim().toLowerCase()==='restart'){begin(true);return;}history.push(raw);historyIndex=history.length;add(`❯ ${raw}`,'command');run.command(raw).forEach(x=>{add(x.text,x.tone);beep(x.tone);});$('command').value='';render();if(follow)$('logs').scrollTop=$('logs').scrollHeight;if(!$('result').open&&matchMedia('(min-width:761px)').matches)$('command').focus({preventScroll:true});}
+function execute(raw){if(!raw.trim()||!started)return;const follow=$('logs').scrollHeight-$('logs').clientHeight-$('logs').scrollTop<32;if(raw.trim().toLowerCase()==='restart'){if(account.active)account.loseKit();begin(true);return;}history.push(raw);historyIndex=history.length;add(`❯ ${raw}`,'command');const priorPhase=run.phase;run.command(raw).forEach(x=>{add(x.text,x.tone);beep(x.tone);});if(priorPhase==='login'&&run.phase==='active')account.active=campaignId;account.save();$('command').value='';render();if(follow)$('logs').scrollTop=$('logs').scrollHeight;if(!$('result').open&&matchMedia('(min-width:761px)').matches)$('command').focus({preventScroll:true});}
 function renderBuild(){
- $('mission-description').textContent=run.final?'ФИНАЛ: скопируй боковой архив с подписью HELIX, вскрой QUANTUM и вернись в GATEWAY.':'Доберись до QUANTUM, скопируй Shard и вернись в GATEWAY. Затем выбери: уйти с добычей или погрузиться глубже.';
+ $('mission-description').textContent=(run.final||run.contract.requiresArchive)?'ФИНАЛ: скопируй боковой архив с подписью HELIX, вскрой QUANTUM и вернись в GATEWAY.':'Доберись до QUANTUM, скопируй Shard и вернись в GATEWAY. Затем выбери: уйти с добычей или погрузиться глубже.';
  $('condition-details').textContent=`${run.anomaly.description} ${ADAPTATIONS[run.adaptation].description}`;
  $('campaign-progress').textContent=`ПОГРУЖЕНИЕ ${sector} / 4${run.final?' · ROOT-ICE':''}`;
- $('buffer-score').textContent=`${campaign.total} ОЧКОВ В БУФЕРЕ`;
- $('sector-condition').textContent=`${run.anomaly.name} · ${ADAPTATIONS[run.adaptation].name}`;
+ $('buffer-score').textContent=`КОШЕЛЁК ${account.credits} Cr`;
+ $('integrity').textContent=`НЕЙРО ${run.integrity}/3 · PHANTOM ${run.phantom?1:0}`;
+ $('show-shop').disabled=started&&run.phase==='active';$('show-shop').title='Магазин доступен до login и после эвакуации';
+ $('sector-condition').textContent=`${run.contract.name} · ×${run.contract.pay} Cr · ${run.anomaly.name}`;
  $('sector-condition').title=`${run.anomaly.description} ${ADAPTATIONS[run.adaptation].description}`;
  const signature=campaign.modules.join(',');
  if($('installed').dataset.signature!==signature){
@@ -92,29 +106,35 @@ function renderBuild(){
  $('empty-build').hidden=campaign.modules.length>0;
 }
 function begin(reset=false){
- if(reset){campaign=new Campaign();campaignId=crypto.randomUUID();}
+ if(reset){campaign=new Campaign(Math.random,{inventory:account.inventory});campaignId=crypto.randomUUID();}
  run=campaign.current;sector=campaign.sector;last=performance.now();history=[];historyIndex=0;started=true;
  $('logs').replaceChildren();$('latest-log').hidden=true;
  add(`QUANTUM REALMS // ПОГРУЖЕНИЕ ${sector}/4\n--------------------------------`,'banner');
+ if(account.interrupted){add('Предыдущая экспедиция прервана. Комплект утрачен, кошелёк сохранён.','warn');account.interrupted=false;}
  add(`Перехвачен токен: ${run.auth}. Введи login ${run.auth}`,'success');
  add(`${run.anomaly.name}: ${run.anomaly.description}`,'warn');
  add(`${ADAPTATIONS[run.adaptation].name}: ${ADAPTATIONS[run.adaptation].description}`);
  if(run.final)add('ROOT-ICE: прежде чем вскрыть QUANTUM, скопируй хотя бы один боковой архив.','warn');
  for(const id of campaign.modules){const d=DAEMONS.find(x=>x.id===id);add(`${d.name}: ${d.benefit} Цена: ${d.cost}`);}
- add(`Разведка: VAULT-A — ${run.nodes[3].size} MB / ${run.nodes[3].transferTime} сек.; VAULT-B — ${run.nodes[5].size} MB / ${run.nodes[5].transferTime} сек. SENTINEL — однократно −22% тревоги.`);
+ add(`Контракт «${run.contract.name}»: ${run.contract.time} сек., оплата ×${run.contract.pay}. ${run.contract.requiresArchive?'Нужен боковой архив перед ядром.':''}`,'warn');
+ add(`Целостность ${run.integrity}/3 и Phantom общие на весь забег. Кошелёк ${account.credits} Cr. Магазин доступен до login.`);
+ add('Сеть скрыта. После входа выполни recon в шлюзе. Содержимое найденного узла узнаешь через scan.');
  add('ICE: сопоставь кандидатов с пробой по позиции. Для эвакуации вернись в GATEWAY.');
  setView('terminal');render();$('logs').scrollTop=$('logs').scrollHeight;if(matchMedia('(min-width:761px)').matches)$('command').focus({preventScroll:true});
 }
 function finish(){
- for(const id of ['ice-guide-dialog','results-dialog','conditions-dialog'])if($(id).open)$(id).close();
- campaign.resolve();
+ for(const id of ['ice-guide-dialog','results-dialog','conditions-dialog','shop-dialog'])if($(id).open)$(id).close();
+ const resolved=campaign.resolve();
+ if(run.phase==='won')account.settle(`${campaignId}:${campaign.sector}`,run.credits);
+ if(resolved&&campaign.stage==='lost')account.loseKit();
+ if(['won','cashed'].includes(campaign.stage)){account.active=null;account.save();}
  const draft=campaign.stage==='draft',lost=campaign.stage==='lost',won=campaign.stage==='won';
  $('result').classList.toggle('draft-dialog',draft);
  $('result-label').textContent=draft?'УКРАДЕННЫЙ КОД / ВЫБЕРИ ОДНОГО ДЕМОНА':lost?'НЕЙРОКАНАЛ УНИЧТОЖЕН':'СОЕДИНЕНИЕ ЗАКРЫТО / ДОБЫЧА СОХРАНЕНА';
  $('result-title').textContent=draft?'Забрать силу врага.':lost?'Забег потерян.':won?'Сердце HELIX остановлено.':'Ты вышел из сети.';
- $('result-reason').textContent=draft?'Уйди с добычей или установи демона и рискни всем буфером в следующем секторе. Все модули действуют вместе.':lost?'Вся добыча забега и установленные демоны потеряны. Следующее погружение начнётся с чистой сигнатуры.':won?'Четыре слоя сети пройдены. Финальный бонус: 1000 очков.':run.reason;
- $('result-score').textContent=campaign.total;
- $('result-files').textContent=lost?'Буфер уничтожен. Рекорд предыдущих забегов сохранён.':run.loot.map(n=>`${n.name} / ${n.size} MB`).join(' · ');
+ $('result-reason').textContent=draft?`Данные проданы за ${run.credits} Cr. Купи инструменты, выбери контракт и демона. Целостность и Phantom не восстанавливаются.`:lost?`${run.reason} Текущая добыча, демоны и комплект потеряны. Кошелёк защищён.`:won?'Четыре слоя HELIX пройдены. Данные проданы, премия за финал включена в выплату.':run.reason;
+ $('result-score').textContent=campaign.earned;
+ $('result-files').textContent=lost?`Комплект утрачен. Кошелёк: ${account.credits} Cr.`:run.loot.map(n=>`${n.name} / ${n.size} MB`).join(' · ');
  $('draft').hidden=!draft;
  $('offers').replaceChildren();offerIndex=0;
  if(draft){
@@ -125,21 +145,51 @@ function finish(){
    const title=document.createElement('strong');title.textContent=d.name;
    const benefit=document.createElement('p');benefit.textContent=d.benefit;
    const cost=document.createElement('p');cost.className='daemon-cost';cost.textContent=d.cost;
-   const action=document.createElement('span');action.className='daemon-action';action.textContent='ВСТРОИТЬ И ПОГРУЗИТЬСЯ →';
+   const action=document.createElement('span');action.className='daemon-action';action.textContent='ВСТРОИТЬ · ПРИНЯТЬ КОНТРАКТ →';
    button.append(tag,title,benefit,cost,action);
    button.onclick=()=>{if(campaign.install(d.id)){$('result').close();begin();}};
    $('offers').append(button);
   }
  }
- $('again').textContent=draft?`УЙТИ И СОХРАНИТЬ ${campaign.total} ОЧКОВ ↗`:'НОВОЕ ПОГРУЖЕНИЕ ↗';
- if(['won','cashed','lost'].includes(campaign.stage)){results.add({id:campaignId,date:new Date().toISOString(),status:campaign.stage,score:campaign.total,sector:campaign.sector,modules:campaign.modules.map(id=>DAEMONS.find(d=>d.id===id).name),reason:run.reason||''});}
- if(['won','cashed'].includes(campaign.stage)){
-  best=Math.max(best,campaign.total);try{localStorage.setItem('qrm-best',String(best));}catch{}
-  $('best').textContent=`ЛУЧШИЙ РЕЗУЛЬТАТ ${best}`;
+ $('again').textContent=draft?`ЗАВЕРШИТЬ ЗАБЕГ · КОШЕЛЁК ${account.credits} Cr ↗`:'НОВОЕ ПОГРУЖЕНИЕ ↗';
+ if(['won','cashed','lost'].includes(campaign.stage)){results.add({id:campaignId,date:new Date().toISOString(),status:campaign.stage,score:campaign.earned,credits:campaign.earned,sector:campaign.sector,modules:campaign.modules.map(id=>DAEMONS.find(d=>d.id===id).name),reason:run.reason||''});}
+ if(['won','cashed','lost'].includes(campaign.stage)){
+  best=Math.max(best,campaign.earned);try{localStorage.setItem('qrm-earnings-best',String(best));}catch{}
+  $('best').textContent=`ЛУЧШАЯ ВЫРУЧКА ${best} Cr`;
  }
- $('offer-page').textContent=`1 / ${campaign.offers.length}`;
+ renderRoutes();$('offer-page').textContent=`1 / ${campaign.offers.length}`;
  renderBuild();$('result').showModal();
 }
+function renderRoutes(){
+ $('contract-routes').replaceChildren(...campaign.routes.map(route=>{
+  const button=document.createElement('button');button.className='route-choice';
+  button.setAttribute('aria-pressed',String(campaign.nextContract?.id===route.id));
+  const name=document.createElement('strong');name.textContent=route.name;
+  const detail=document.createElement('span');detail.textContent=`${route.time} сек. · оплата ×${route.pay}${route.requiresArchive?' · нужен боковой архив':''}${route.pressure>1?' · тревога +25%':''}`;
+  button.append(name,detail);button.title=route.description;
+  button.onclick=()=>{campaign.selectContract(route.id);renderRoutes();};return button;
+ }));
+}
+function shopAllowed(){return !started||run.phase==='login'||run.phase==='won'||run.phase==='lost';}
+function renderShop(){
+ if(campaign.stage==='draft')$('again').textContent=`ЗАВЕРШИТЬ ЗАБЕГ · КОШЕЛЁК ${account.credits} Cr ↗`;
+ const tool=TOOLS[shopIndex];
+ $('shop-balance').textContent=`Кошелёк ${account.credits} Cr · комплект ${account.load}/3${account.saved?'':' · сохранение недоступно'}`;
+ const heading=document.createElement('h3');heading.textContent=tool.name;
+ const description=document.createElement('p');description.textContent=tool.description;
+ const usage=document.createElement('code');usage.textContent=`use ${tool.id} · в комплекте ${account.inventory[tool.id]||0}`;
+ $('shop-item').replaceChildren(heading,description,usage);
+ $('shop-page').textContent=`${shopIndex+1} / ${TOOLS.length}`;
+ $('buy-tool').textContent=`КУПИТЬ ЗАРЯД · ${tool.price} Cr`;
+ $('buy-tool').disabled=!shopAllowed()||account.credits<tool.price||account.load>=3;
+ renderBuild();
+}
+function openShop(){if(!shopAllowed())return;renderShop();$('shop-dialog').showModal();}
+$('show-shop').onclick=openShop;$('draft-shop').onclick=openShop;
+$('shop-prev').onclick=()=>{shopIndex=(shopIndex+TOOLS.length-1)%TOOLS.length;renderShop();};
+$('shop-next').onclick=()=>{shopIndex=(shopIndex+1)%TOOLS.length;renderShop();};
+$('buy-tool').onclick=()=>{if(shopAllowed()&&account.buy(TOOLS[shopIndex].id))renderShop();};
+$('close-shop').onclick=()=>$('shop-dialog').close();
 function setView(view){
  const workspace=document.querySelector('.workspace');
  if(workspace.dataset.view==='terminal')followWhenReturning=$('logs').scrollHeight-$('logs').clientHeight-$('logs').scrollTop<32;
@@ -174,6 +224,7 @@ $('fullscreen').onclick=async()=>{
 };
 document.addEventListener('fullscreenchange',()=>{$('fullscreen').textContent=document.fullscreenElement?'СВЕРНУТЬ':'НА ВЕСЬ ЭКРАН';});
 $('show-conditions').onclick=()=>{
+ $('kit-summary').textContent=`Комплект ${account.load}/3: ${TOOLS.filter(t=>account.inventory[t.id]).map(t=>`${t.name} ×${account.inventory[t.id]}`).join(' · ')||'пусто'}. use sniffer / emp / tunnel / patch`;
  $('conditions-text').textContent=`${run.anomaly.name}: ${run.anomaly.description} ${ADAPTATIONS[run.adaptation].name}: ${ADAPTATIONS[run.adaptation].description}`;
  $('conditions-modules').replaceChildren(...campaign.modules.map(id=>{
   const d=DAEMONS.find(x=>x.id===id),el=document.createElement('article'),name=document.createElement('strong'),text=document.createElement('p');
@@ -190,13 +241,13 @@ function renderResults(){
  resultsPage=Math.min(resultsPage,pages-1);
  $('results-page').textContent=`${resultsPage+1} / ${pages}`;
  $('results-prev').disabled=resultsPage===0;$('results-next').disabled=resultsPage===pages-1;
- $('results-summary').textContent=results.entries.length?`${results.entries.length} завершённых забегов · лучший результат ${Math.max(best,...results.entries.map(x=>x.score))}`:'Здесь появятся завершённые забеги. После сектора выбери выход с добычей или пройди все четыре слоя.';
+ $('results-summary').textContent=results.entries.length?`${results.entries.length} завершённых забегов · кошелёк ${account.credits} Cr`:'Здесь появятся завершённые забеги. После сектора выбери выход с добычей или пройди все четыре слоя.';
  if(!results.saved)$('results-summary').textContent+=' Браузер не разрешил сохранить журнал: записи доступны только до перезагрузки.';
  $('results-list').replaceChildren(...results.entries.slice(resultsPage*perPage,(resultsPage+1)*perPage).map(entry=>{
   const article=document.createElement('article');article.className='saved-result';
   const heading=document.createElement('div');heading.className='saved-result-heading';
   const title=document.createElement('strong');title.textContent=entry.status==='won'?'HELIX повержен':entry.status==='lost'?'Забег потерян':'Выход с добычей';
-  const score=document.createElement('span');score.textContent=`${entry.score} очков`;
+  const score=document.createElement('span');score.textContent=entry.credits!==undefined?`${entry.credits} Cr`:`${entry.score} очков`;
   heading.append(title,score);
   const details=document.createElement('p');details.textContent=`${new Date(entry.date).toLocaleString('ru-RU',{dateStyle:'short',timeStyle:'short'})} · Сектор ${entry.sector}/4`;
   const modules=document.createElement('p');modules.textContent=entry.modules.length?entry.modules.join(' · '):'Без демонов';
@@ -210,10 +261,10 @@ window.addEventListener('resize',()=>{if($('results-dialog').open)renderResults(
 $('close-results').onclick=()=>$('results-dialog').close();
 $('command-form').onsubmit=e=>{e.preventDefault();execute($('command').value);};
 $('command').onkeydown=e=>{if(e.key==='ArrowUp'){e.preventDefault();historyIndex=Math.max(0,historyIndex-1);e.target.value=history[historyIndex]||'';}if(e.key==='ArrowDown'){e.preventDefault();historyIndex=Math.min(history.length,historyIndex+1);e.target.value=history[historyIndex]||'';}if(e.key==='Tab'){e.preventDefault();const val=e.target.value.toLowerCase();const match=[...suggestions(),'scan','scrub','phantom','extract','help'].find(x=>x.toLowerCase().startsWith(val));if(match)e.target.value=match;}};
-function mapAction(e){const target=e.target.closest('[data-id]');if(target&&started&&run.phase==='active'){execute(`connect ${run.nodes[Number(target.dataset.id)].name}`);setView('terminal');}}
+function mapAction(e){const target=e.target.closest('[data-id]');if(target&&started&&run.phase==='active'){execute(`connect ${run.nodes[Number(target.dataset.id)].address}`);setView('terminal');}}
 $('network').onclick=mapAction;$('network').onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();mapAction(e);}};
 $('start').onclick=()=>{$('briefing').close();begin();};$('again').onclick=()=>{if(campaign.stage==='draft'){campaign.cashOut();$('result').close();finish();}else{$('result').close();begin(true);}};
-$('restart').onclick=()=>{if(started&&['login','active'].includes(run.phase)){add('Чтобы завершить забег с добычей: extract. Весь буфер забега будет потерян. Для сброса введи restart.','warn');$('command').value='restart';$('command').focus();return;}begin(true);};
+$('restart').onclick=()=>{if(started&&['login','active'].includes(run.phase)){add('Чтобы завершить забег с добычей: extract. Текущая добыча и сборка будут потеряны. Для сброса введи restart.','warn');$('command').value='restart';$('command').focus({preventScroll:true});return;}begin(true);};
 $('help').onclick=()=>{if(started)execute('help');else $('briefing').showModal();};$('phantom').onclick=()=>execute('phantom');
 $('sound').onclick=()=>{sound=!sound;$('sound').textContent=sound?'SOUND ON':'SOUND OFF';$('sound').setAttribute('aria-label',sound?'Выключить звук':'Включить звук');beep();};
 $('briefing').addEventListener('cancel',e=>{e.preventDefault();$('briefing').close();begin();});$('result').addEventListener('cancel',e=>e.preventDefault());

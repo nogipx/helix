@@ -14,7 +14,7 @@ for(const puzzleSeconds of [4,8,12])for(const [policy,route] of Object.entries(p
   const wait=seconds=>{for(let i=0;i<seconds;i++)r.tick();};
   const mitigate=()=>{if(r.trace>=48&&r.phantom)r.command('phantom');if(r.trace>=65&&!r.cooldown)r.command('scrub');};
   for(const name of route){
-   mitigate();r.command(`connect ${name}`);wait(2);
+   mitigate();r.command('recon');r.command(`connect ${name}`);wait(2);
    const n=r.nodes[r.at];
    if(!n.open){r.command('scan');wait(2);wait(puzzleSeconds);mitigate();r.command(`breach ${n.key}`);}
    if(n.file&&!n.taken){mitigate();r.command('siphon');while(r.transfer&&r.phase==='active')r.tick();}

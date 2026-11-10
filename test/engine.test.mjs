@@ -4,7 +4,7 @@ import {Run, matches} from '../dist/engine.mjs';
 function rng(seed) {return () => ((seed = (Math.imul(seed,1664525)+1013904223) >>> 0) / 2**32);}
 function enter(seed=42) {const r=new Run(rng(seed));r.command(`login ${r.auth}`);return r;}
 function unlock(r) {r.command('scan');r.command(`breach ${r.nodes[r.at].key}`);}
-function move(r,name) {r.command(`connect ${name}`);}
+function move(r,name) {r.command('recon');r.command(`connect ${name}`);}
 function download(r) {r.command('siphon');const total=r.transfer?.total||0;for(let i=0;i<total;i++)r.tick();}
 function vault(r) {move(r,'RELAY-A');unlock(r);move(r,'VAULT-A');unlock(r);}
 function home(r) {move(r,'VAULT-A');move(r,'RELAY-A');move(r,'GATEWAY');}
@@ -12,7 +12,7 @@ function home(r) {move(r,'VAULT-A');move(r,'RELAY-A');move(r,'GATEWAY');}
 test('full mission requires solving ICE, downloading shard and returning to gateway',()=>{
  const r=enter();vault(r);move(r,'QUANTUM');unlock(r);download(r);
  assert.equal(r.loot[0].name,'quantum.shard');r.command('extract');assert.equal(r.phase,'active');
- home(r);r.command('extract');assert.equal(r.phase,'won');assert.ok(r.score>1000);
+ home(r);r.command('extract');assert.equal(r.phase,'won');assert.equal(r.credits,160);
  const time=r.time;r.tick();assert.equal(r.time,time);
 });
 test('each generated ICE has exactly one solution across 1,000 seeded runs',()=>{
@@ -52,13 +52,13 @@ test('Phantom is single use; sentinel reward cannot be farmed',()=>{
  move(r,'RELAY-A');unlock(r);move(r,'SENTINEL');r.command('scan');const before=r.trace;r.command(`breach ${r.nodes[4].key}`);assert.equal(r.trace,Math.max(0,before+12-22));const after=r.trace;r.command('overload');assert.equal(r.trace,after);
 });
 test('failure takes precedence over transfer completion and cannot award score',()=>{
- const r=enter();vault(r);r.command('siphon');r.transfer.remaining=1;r.time=1;r.tick();assert.equal(r.phase,'lost');assert.equal(r.loot.length,0);assert.equal(r.score,0);assert.equal(r.transfer,null);
+ const r=enter();vault(r);r.command('siphon');r.transfer.remaining=1;r.time=1;r.tick();assert.equal(r.phase,'lost');assert.equal(r.loot.length,0);assert.equal(r.credits,0);assert.equal(r.transfer,null);
 });
 test('lethal patrol on final transfer tick cannot grant loot',()=>{
  const r=enter();vault(r);r.command('siphon');r.transfer.remaining=1;r.elapsed=29;r.trace=95;r.tick();assert.equal(r.phase,'lost');assert.equal(r.loot.length,0);
 });
 test('partial extraction banks loot only at gateway; empty extraction is blocked',()=>{
- const r=enter();r.command('extract');assert.equal(r.phase,'active');vault(r);download(r);move(r,'RELAY-A');move(r,'GATEWAY');r.command('extract');assert.equal(r.phase,'won');assert.ok(r.score>260);assert.ok(r.reason.includes('Частичная'));
+ const r=enter();r.command('extract');assert.equal(r.phase,'active');vault(r);download(r);move(r,'RELAY-A');move(r,'GATEWAY');r.command('extract');assert.equal(r.phase,'won');assert.ok(r.credits>=65);assert.ok(r.reason.includes('Частичная'));
 });
 test('security costs cannot be rescued by sentinel reward after lethal exposure',()=>{
  const r=enter();move(r,'RELAY-A');unlock(r);move(r,'SENTINEL');r.trace=95;r.command('overload');assert.equal(r.phase,'lost');assert.equal(r.nodes[4].open,false);
